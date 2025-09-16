@@ -29,8 +29,7 @@ eval_iters = 200
 
 gradient_accumulation_steps = 1
 
-grads_dir = "grads"
-save_gradients = True
+save_gradients = False
 gradient_save_interval = 250 
 
 save_best_model = True # Should be saved best model to best_model.pt

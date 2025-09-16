@@ -45,7 +45,6 @@ for arg in sys.argv[1:]:
             globals()[key] = attempt
         else:
             raise ValueError(f"Unknown config key: {key}")
-# Для другого способа вызывать скрипт, когда переменные  прямо добавляются в среду.
 if 'CONFIG' in globals():
     config_file = globals()['CONFIG']
     with open(config_file) as f:

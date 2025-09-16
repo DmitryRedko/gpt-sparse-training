@@ -2,7 +2,6 @@ from typing import Dict, Sequence, Tuple, Optional, Union
 
 import torch.nn as nn
 
-from sparsify_activations_layer import LinearActivationsPruner
 
 class SparsityScheduler:
     def __init__(
@@ -49,6 +48,8 @@ class SparsityScheduler:
             return self._ratio_uniform(step)
         if self.mode == "grid":
             return self._ratio_grid(step)
+        if self.mode == "static":
+            return self.start
         raise ValueError("mode must be 'uniform' or 'grid'")
 
     def _apply_ratio(self, ratio: float) -> None:

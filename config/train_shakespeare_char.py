@@ -26,6 +26,7 @@ n_layer = 6
 n_head = 6
 n_embd = 384
 dropout = 0.2
+activation_function = "gelu"  # "gelu", "relu", "relu^2"
 
 learning_rate = 5e-4  # или даже 3e-4
 max_iters = 5000

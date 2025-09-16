@@ -51,11 +51,10 @@ print("Expected experiments:\nBASIC:",BASIC, *[f"\n\t{params}" for params in EXP
 def run_once (**kargs):
     run_name = "-".join([f"{k}_{kargs[k]}".replace(".",",") for k in kargs]) if len(kargs)>0 else "basic"
     out_dir = LOG_PATH/run_name/"out"
-    grads_dir = LOG_PATH/run_name/"grad"
     print(f"==========================\n\tRun: {run_name}\n\tOut dir: {out_dir}\n==========================")
     # TRAIN
     params = dict(BASIC)
-    params.update({"grads_dir":grads_dir, "out_dir":out_dir, "wandb_run_name":run_name})
+    params.update({"out_dir":out_dir, "wandb_run_name":run_name})
     params.update(kargs)
     train_global = {'CONFIG':CONFIG, 'PARAMS':params}
     stdout_buffer, stderr_buffer = io.StringIO(), io.StringIO()
@@ -75,7 +74,7 @@ def run_once (**kargs):
 
     # EVAL (resume)
     params = dict(BASIC)
-    params.update({"grads_dir":grads_dir, "out_dir":out_dir, "wandb_run_name":run_name,
+    params.update({"out_dir":out_dir, "wandb_run_name":run_name,
               "eval_only":True, "init_from":'resume'})
     params.update(kargs)
     val_global = {'CONFIG':CONFIG, 'PARAMS':params}

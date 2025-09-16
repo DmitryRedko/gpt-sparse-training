@@ -18,7 +18,6 @@ run_once () {
   local sratio="$2"
   local run_name="${stype}-${sratio}"
   local out_dir="out-${stype}-${sratio}"
-  local grads_dir="grads-${stype}-${sratio}"
 
   echo "=========================="
   echo "Run: ${run_name}"
@@ -27,7 +26,6 @@ run_once () {
 
   # TRAIN
   python train.py "${CONFIG}" \
-    --grads_dir="${grads_dir}" \
     --out_dir="${out_dir}" \
     --sparsity_ratio="${sratio}" \
     --sparsity_type="${stype}" \
@@ -39,7 +37,6 @@ run_once () {
     --eval_only=True \
     --init_from='resume' \
     --out_dir="${out_dir}" \
-    --grads_dir="${grads_dir}" \
     --sparsity_ratio="${sratio}" \
     --sparsity_type="${stype}" \
     --wandb_run_name="${run_name}" | tee "${tmpfile}"
