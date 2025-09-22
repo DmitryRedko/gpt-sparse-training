@@ -1,8 +1,11 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 import os
 import time
 import math
 import pickle
 from contextlib import nullcontext
+from types import SimpleNamespace
 
 import numpy as np
 import torch
@@ -18,6 +21,8 @@ eval_interval = 2000
 log_interval = 1
 eval_iters = 200
 eval_only = False  # if True, script exits right after the first eval
+eval_stable = False # always eval on the same batch
+eval_shift = 0 # For test and val difference at eval_stable = True mode. eval_shift = 0 means shift to test
 always_save_checkpoint = True  # if True, always save a checkpoint after each eval
 init_from = 'scratch'  # 'scratch' | 'resume' | 'gpt2*'
 # wandb logging
@@ -56,6 +61,7 @@ mode: str = "all",  # "all", "exclude-first-last", or "custom"
 custom_slice = None
 
 save_best_model = True
+save_last_model  = True
 always_save_checkpoint = True
 
 # EARLY‑STOPPING --------------------------------------------------------------
@@ -65,7 +71,7 @@ early_stop_patience = 3  # number of consecutive evals with rising perplexity
 
 
 eval_ckpt_name = "best_model.pt"
-
+eval_history_name = "best_history.pt"
 save_gradients = False
 gradient_save_interval = 250
 grads_dir = "grads"
@@ -110,11 +116,15 @@ print(f"tokens per iteration will be: {tokens_per_iter:,}")
 data_dir = os.path.join('data', dataset)
 
 
-def get_batch(split):
+def get_batch(split, batch_index:int=None):
     """Return one batch of data as (x, y) tensors."""
     path = os.path.join(data_dir, f'{split}.bin')
     data = np.memmap(path, dtype=np.uint16, mode='r')
-    ix = torch.randint(len(data) - block_size, (batch_size,))
+    if batch_index is None:
+        ix = torch.randint(len(data) - block_size, (batch_size,))
+    else: # Хорошо бы сделать со сдвигом, чтобы не только первую часть текста провверять, но мы не знаем на сколько грууп распадётся датасет, поэтому будем хитрить.
+        start = batch_index % block_size + batch_size*block_size * (batch_index // block_size)
+        ix = torch.arange(start, start + batch_size*block_size, block_size)
     x = torch.stack([
         torch.from_numpy((data[i : i + block_size]).astype(np.int64)) for i in ix
     ])
@@ -148,7 +158,7 @@ model_args = dict(
     vocab_size=None,
     dropout=dropout,
 )
-
+history = SimpleNamespace(val_ppl=[], loss=SimpleNamespace(train=[], val=[]))
 if init_from == 'scratch':
     print("Initializing a new model from scratch")
     if meta_vocab_size is None:
@@ -165,8 +175,11 @@ if init_from == 'scratch':
         raise ValueError("Could not classify such sparsity_mode")
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
-    ckpt_path = os.path.join(out_dir, eval_ckpt_name)
-    checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+    checkpoint = torch.load(os.path.join(out_dir, eval_ckpt_name), map_location=device, weights_only=False)
+    history = torch.load(os.path.join(out_dir, eval_history_name), weights_only=False)
+    if hasattr(history, "val_ppl_history"):
+        history.val_ppl = history.val_ppl_history
+    
     checkpoint_model_args = checkpoint['model_args']
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = checkpoint_model_args[k]
@@ -228,8 +241,8 @@ def estimate_loss():
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
-            x, y = get_batch(split)
+        for i,k in enumerate(range(eval_iters)):
+            x, y = get_batch(split) if not eval_stable else get_batch(split,i + eval_shift*eval_iters)
             with ctx:
                 _, loss = model(x, y)
             losses[k] = loss.item()
@@ -290,7 +303,6 @@ t0 = time.time()
 local_iter_num = 0
 running_mfu = -1.0
 
-val_ppl_history = []
 early_stop = False
 
 ppl = []
@@ -309,13 +321,15 @@ while True:
             print(f"iter {iter_num}: sparsity={sparsity_now:.3f}")
         
             
-        losses = estimate_loss()  
+        losses = estimate_loss()
+        history.loss.train.append(losses['train'])
+        history.loss.val.append(losses['val'])
         ppl_val = measure_perplexity(split='val', batch_size=8)
         ppl.append(ppl_val)
-        val_ppl_history.append(ppl_val)
-
-        if early_stop_mode and len(val_ppl_history) >= early_stop_patience:
-            recent = val_ppl_history[-early_stop_patience:]
+        history.val_ppl.append(ppl_val)
+        
+        if early_stop_mode and len(history.val_ppl) >= early_stop_patience:
+            recent = history.val_ppl[-early_stop_patience:]
             if all(recent[i] >= recent[i-1] for i in range(1, early_stop_patience)):
                 print(
                     f"Early stopping triggered: validation perplexity increased for the last {early_stop_patience} evals"
@@ -323,9 +337,8 @@ while True:
                 early_stop = True
 
         print(f"Strict perplexity over full val.bin: {ppl_val:.4f}")
-        print(
-            f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
-        )
+        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        
         if wandb_log and eval_only == False:
             wandb.log(
                 {
@@ -337,21 +350,9 @@ while True:
                     "mfu": running_mfu * 100,
                 }
             )
-        if losses['val'] < best_val_loss and save_best_model:
-            best_val_loss = losses['val']
-            if iter_num > 0:
-                checkpoint = {
-                    'model': raw_model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'model_args': model_args,
-                    'iter_num': iter_num,
-                    'best_val_loss': best_val_loss,
-                    'config': config,
-                }
-                print(f"saving checkpoint to {out_dir}")
-                torch.save(checkpoint, os.path.join(out_dir, 'best_model.pt'))
-                
-        if always_save_checkpoint and iter_num > 0:
+            
+        def save_checkpoint(mark:str):
+            global checkpoint
             checkpoint = {
                 'model': raw_model.state_dict(),
                 'optimizer': optimizer.state_dict(),
@@ -361,7 +362,16 @@ while True:
                 'config': config,
             }
             print(f"saving checkpoint to {out_dir}")
-            torch.save(checkpoint, os.path.join(out_dir, f'ckpt_{iter_num}.pt'))
+            torch.save(checkpoint, os.path.join(out_dir, f'{mark}_model.pt'))
+            # history пишу отдельно чтобы и читать его можно было отдельно не подтягивая кучи библиотек
+            torch.save(history, os.path.join(out_dir, f'{mark}_history.pt'))
+        if losses['val'] < best_val_loss and save_best_model:
+            best_val_loss = losses['val']
+            save_checkpoint('best')
+        if always_save_checkpoint:
+            save_checkpoint(f'ckpt_{iter_num:05d}')
+        if save_last_model:
+            save_checkpoint('last')
 
     if eval_only:
         ppl_val = measure_perplexity(split='val', batch_size=8)
@@ -391,11 +401,9 @@ while True:
         torch.save(grad_snapshot, os.path.join(grads_dir, f'grads_{iter_num}.pt'))
         del grad_snapshot
 
-    
     scaler.step(optimizer)
     scaler.update()
     optimizer.zero_grad(set_to_none=True)
-
 
     dt = time.time() - t0
     t0 = time.time()

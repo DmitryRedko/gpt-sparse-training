@@ -13,21 +13,28 @@ from teeoutput import TeeOutput
 
 os.environ['WANDB_MODE'] = 'offline'
 #os.environ["WANDB_DISABLED"] = "true"
+CONFIG="config/train_shakespeare_char.py" # "config/train_wikitext.py"
 
 # Эти значения будут добавляться ко всем параметрам
 # ("max_iters", 100), ("eval_interval", 100),
-            
 BASIC = {'sparsity_type': 'orig',
-         'weight_decay': 0.8, 'learning_rate': 0.001, 'min_lr': 2e-05, 'lr_decay_iters': 2000}
+         'weight_decay': 0.8, 'learning_rate': 0.001, 'min_lr': 2e-05, 'lr_decay_iters': 2000,
+         'dropout':0.0, "weight_decay":0.5, 'n_embd':24*16, "n_head":12, "sparsity_type":"masked_weights",
+         'early_stop_mode':False, 'max_iters':100000,
+         'wdw_pruning_positive_loss_reduction':3e-6,
+         'wdw_pruning_negative_loss_reduction':3e-7,
+         'wdw_pruning_positive_max_count':1000,
+         "wdw_pruning_negative_max_count":0,
+         'always_save_checkpoint':True
+         }
 # Списки значений для перебора:
-SERIES = [("batch_size", [32, 16, 4, 2]),
-          ("beta1",[.95, .975, .9875, .995])]
+SERIES = [
+          ("wdw_pruning_replanish_ratio", [0.5, .75, 0.9])]
 
-CONFIG="config/train_shakespeare_char.py" # "config/train_wikitext.py"
+# Тут можно прямо указать дату эксперимента, и тогда можно будет резюмить, на сколько я понимаю
 LOG_PATH = Path(os.environ.get('LOG_PATH', f"log/series.{datetime.now().strftime('%Y%m%d_%H%M')}"))
 LOG_PATH.mkdir(exist_ok=True, parents=True)
 LOGFILE=LOG_PATH/"results.log"
-
 
 # Обходим дерево вглубину
 PATH, EXPERIMENTS = [], []
@@ -35,6 +42,8 @@ while True:
     if len(PATH) < len(SERIES): # Если нужно углубиться
         itr = iter(SERIES[len(PATH)][1])
         PATH.append((next(itr),itr))
+    elif len(SERIES) == 0:
+        break
     else:
         EXPERIMENTS.append([(key,value) for (key,series),(value,iterator) in zip(SERIES,PATH)])
         while len(PATH) > 0:
